@@ -18,8 +18,8 @@ tokio-openssl = "0.6"
 #
 # NOTE: The version of the `openssl-sys` crate is not the same as OpenSSL itself.
 #       Versions 1.0.1 - 3.0.0 are automatically discovered.
-openssl-sys = "0.9"
-openssl = "0.10"
+openssl-sys = { version = "0.9"}
+openssl = {version = "0.10"}
 
 [[bin]]
 name = "s2n-netbench-driver-client-openssl"
