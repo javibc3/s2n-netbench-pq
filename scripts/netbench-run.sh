@@ -57,13 +57,13 @@ run_trial() {
 # through this binary.
 ./$ARTIFACT_FOLDER/s2n-netbench-scenarios --request_response.connections 10000 --request_response.request_size 1 --request_response.response_size 1
 
-run_trial request_response s2n-quic
-run_trial request_response s2n-tls
-run_trial request_response native-tls
+# run_trial request_response s2n-quic
+# run_trial request_response s2n-tls
+# run_trial request_response openssl
 
 run_trial connect s2n-quic
 run_trial connect s2n-tls
-run_trial connect native-tls
+run_trial connect openssl
 
 echo "generating the report"
 ./$ARTIFACT_FOLDER/s2n-netbench report-tree $NETBENCH_ARTIFACT_FOLDER/results $NETBENCH_ARTIFACT_FOLDER/report
