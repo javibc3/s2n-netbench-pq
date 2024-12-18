@@ -1,6 +1,6 @@
-# s2n-netbench
+# s2n-netbench-pq
 
-An efficiency, performance, and correctness analysis tool for transport protocols.
+An extension of the original s2n-netbench tool with support for post-quantum KEMs and signature algorithms.
 
 ## Why does this exist?
 
@@ -19,6 +19,10 @@ Here are a few examples of questions that s2n-netbench aims to answer:
 * What is the optimal configuration of the transport's settings for my workload?
 * How does certificate chain length affect handshake throughput?
 * Is implementation "X" interoperable with implementation "Y" of "Z" protocol?
+
+## Prerequisites
+Right now, to make it work, OpenSSL (In most Linux distributions it should be installed by default) must be installed in the system and [oqs-provider](https://github.com/open-quantum-safe/oqs-provider) must be installed and activated by default in the OpenSSL configuration as it says in https://github.com/open-quantum-safe/oqs-provider/blob/main/USAGE.md#system-wide-installation
+ 
 
 ## Quickstart
 A basic use of s2n-netbench is demonstrated in the `netbench-run.sh` script. This script will

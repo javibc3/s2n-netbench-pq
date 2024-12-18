@@ -1,67 +1,177 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::scenario;
-use rcgen::SignatureAlgorithm;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, process::Command, sync::Arc};
 
-static DEFAULT_ALG: &SignatureAlgorithm = &rcgen::PKCS_ECDSA_P256_SHA256;
+use crate::scenario;
+use openssl::x509::X509Req;
+use openssl::x509::X509;
+use openssl::pkey::PKey;
+use openssl::x509::extension::{BasicConstraints, KeyUsage, SubjectAlternativeName};
+use openssl::asn1::Asn1Time;
 
 #[derive(Clone, Debug, Hash)]
 pub(crate) enum Certificate {
     Authority {
-        alg: &'static SignatureAlgorithm,
+        alg: String,
     },
     PrivateKey {
-        alg: &'static SignatureAlgorithm,
+        alg: String,
         authority: u64,
-        intermediates: Vec<&'static SignatureAlgorithm>,
+        intermediates: Vec<String>,
     },
-    // Placeholder for a public cert
     Public,
 }
 
-fn create_ca(domain: &str, name: String, alg: &'static SignatureAlgorithm) -> rcgen::Certificate {
-    use rcgen::{
-        BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, IsCa,
-        KeyUsagePurpose,
-    };
+fn create_ca(domain: &str, name: &String, alg: &String) -> (String, String) {
+    let config = format!(
+        r#"[ req ]
+prompt = no
+distinguished_name = dn
+x509_extensions = v3_ca
 
-    let mut params = CertificateParams::new(vec![domain.to_string()]);
-    params.alg = alg;
-    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    params.distinguished_name = DistinguishedName::new();
-    params.distinguished_name.push(DnType::CountryName, "US");
-    params.distinguished_name.push(DnType::CommonName, name);
-    params.key_usages = vec![
-        KeyUsagePurpose::DigitalSignature,
-        KeyUsagePurpose::KeyCertSign,
-        KeyUsagePurpose::CrlSign,
-    ];
-    Certificate::from_params(params).unwrap()
+[ dn ]
+C = US
+CN = {name}
+
+[ v3_ca ]
+keyUsage = critical,keyCertSign,cRLSign
+basicConstraints = critical,CA:true
+subjectAltName = DNS:{domain}
+"#
+    );
+
+    let config_path = format!("/tmp/{name}_ca.cnf");
+    std::fs::write(&config_path, config).expect("Failed to write OpenSSL config");
+
+    let output = Command::new("openssl")
+        .args([
+            "req",
+            "-noenc",
+            "-new",
+            "-x509",
+            "-days",
+            "365",
+            "-newkey",
+            alg,
+            "-keyout",
+            "/tmp/ca_key.pem",
+            "-out",
+            "/tmp/ca_cert.pem",
+            "-config",
+            &config_path,
+        ])
+        .output()
+        .expect("Failed to execute OpenSSL");
+
+    if !output.status.success() {
+        panic!(
+            "OpenSSL failed with error: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let cert = std::fs::read_to_string("/tmp/ca_cert.pem").expect("Failed to read CA certificate");
+    let private_key = std::fs::read_to_string("/tmp/ca_key.pem").expect("Failed to read private key");
+
+    (cert, private_key)
 }
 
-fn create_cert(domain: &str, name: String, alg: &'static SignatureAlgorithm) -> rcgen::Certificate {
-    use rcgen::{
-        Certificate, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose,
-        KeyUsagePurpose,
-    };
+fn create_cert(
+    domain: &str,
+    name: &String,
+    alg: &str,
+    ca_cert: &String,
+    ca_key: &String,
+) -> (String, String) {
+    let config = format!(
+        r#"[ req ]
+prompt = no
+distinguished_name = dn
+req_extensions = v3_req
 
-    let mut params = CertificateParams::new(vec![domain.to_string(), format!("*.{domain}")]);
-    params.alg = alg;
-    params.use_authority_key_identifier_extension = true;
-    params.distinguished_name = DistinguishedName::new();
-    params.distinguished_name.push(DnType::CountryName, "US");
-    params.distinguished_name.push(DnType::CommonName, name);
-    params.key_usages = vec![
-        KeyUsagePurpose::DigitalSignature,
-        KeyUsagePurpose::KeyEncipherment,
-    ];
-    params.extended_key_usages = vec![
-        ExtendedKeyUsagePurpose::ServerAuth,
-        ExtendedKeyUsagePurpose::ClientAuth,
-    ];
-    Certificate::from_params(params).unwrap()
+[ dn ]
+C = US
+CN = {name}
+
+[ v3_req ]
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth,clientAuth
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.1 = {domain}
+DNS.2 = *.{domain}
+"#
+    );
+
+    let config_path = format!("/tmp/{name}_cert.cnf");
+    std::fs::write(&config_path, config).expect("Failed to write OpenSSL config");
+
+    let output = Command::new("openssl")
+        .args([
+            "req",
+            "-noenc",
+            "-new",
+            "-newkey",
+            alg,
+            "-keyout",
+            "/tmp/leaf_key.pem",
+            "-out",
+            "/tmp/leaf_csr.pem",
+            "-config",
+            &config_path,
+        ])
+        .output()
+        .expect("Failed to execute OpenSSL");
+
+    if !output.status.success() {
+        panic!(
+            "OpenSSL failed with error: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let csr = X509Req::from_pem(&std::fs::read("/tmp/leaf_csr.pem").expect("Failed to read CSR")).expect("Failed to parse CSR");
+    let ca_cert = X509::from_pem(ca_cert.as_bytes()).expect("Failed to parse CA certificate");
+    let ca_key = PKey::private_key_from_pem(ca_key.as_bytes()).expect("Failed to parse CA private key");
+
+    let mut builder = X509::builder().expect("Failed to create X509 builder");
+    builder.set_version(2).expect("Failed to set version");
+    builder.set_subject_name(csr.subject_name()).expect("Failed to set subject name");
+    builder.set_issuer_name(ca_cert.subject_name()).expect("Failed to set issuer name");
+    builder.set_pubkey(&csr.public_key().expect("Failed to get public key")).expect("Failed to set public key");
+    builder.set_not_before(&Asn1Time::days_from_now(0).expect("Failed to set not before")).expect("Failed to set not before");
+    builder.set_not_after(&Asn1Time::days_from_now(365).expect("Failed to set not after")).expect("Failed to set not after");
+
+    let basic_constraints = BasicConstraints::new().critical().ca().build().expect("Failed to build BasicConstraints");
+    builder.append_extension(basic_constraints).expect("Failed to append BasicConstraints");
+
+    let key_usage = KeyUsage::new().critical().digital_signature().key_encipherment().build().expect("Failed to build KeyUsage");
+    builder.append_extension(key_usage).expect("Failed to append KeyUsage");
+
+    let san = SubjectAlternativeName::new()
+        .dns(domain)
+        .dns(&format!("*.{}", domain))
+        .build(&builder.x509v3_context(Some(&ca_cert), None))
+        .expect("Failed to build SubjectAlternativeName");
+    builder.append_extension(san).expect("Failed to append SubjectAlternativeName");
+
+    let message_digest = match alg {
+        "rsa:2048" | "rsa:4096" => openssl::hash::MessageDigest::sha256(),
+        _ => openssl::hash::MessageDigest::null(),
+    };
+    builder.sign(&ca_key, message_digest).expect("Failed to sign certificate");
+
+    let cert = builder.build();
+    std::fs::write("/tmp/leaf_cert.pem", cert.to_pem().expect("Failed to write certificate")).expect("Failed to write certificate");
+
+    let cert =
+        std::fs::read_to_string("/tmp/leaf_cert.pem").expect("Failed to read leaf certificate");
+    let private_key =
+        std::fs::read_to_string("/tmp/leaf_key.pem").expect("Failed to read private key");
+
+    (cert, private_key)
 }
 
 impl Certificate {
@@ -77,52 +187,44 @@ impl Certificate {
         for (cert_idx, cert) in certs.into_iter().enumerate() {
             match cert {
                 Self::Authority { alg } => {
-                    let cert = create_ca(&domain, format!("netbench CA {cert_idx}"), alg);
-                    let pem = cert.serialize_pem().unwrap();
+                    // Crear CA usando openssl
+                    let name = format!("netbench CA {cert_idx}");
+                    let (cert,key) = create_ca(&domain, &name, &alg);
 
                     out.push(Arc::new(scenario::Certificate {
-                        pem,
+                        pem: cert.clone(),
                         pkcs12: vec![],
                     }));
 
-                    cas.insert(cert_idx as u64, cert);
+                    cas.insert(cert_idx as u64, (cert, key));
                 }
                 Self::PrivateKey {
                     alg,
                     authority,
                     intermediates,
                 } => {
-                    // create any IAs we need
-                    for (idx, alg) in intermediates.iter().copied().enumerate() {
-                        ias.entry((authority, idx, alg)).or_insert_with(|| {
-                            create_ca(&domain, format!("netbench IA {authority} {idx}"), alg)
-                        });
+                    // Crear cualquier intermediario necesario
+                    for (idx, alg) in intermediates.iter().enumerate() {
+                        ias.entry((authority, idx, alg.clone()))
+                            .or_insert_with(|| {
+                                let name = format!("netbench IA {authority} {idx}");
+                                create_ca(&domain, &name, alg)
+                            });
                     }
 
-                    // create a reverse chain of authorities that need to sign this cert
-                    let ca = cas.get(&authority).unwrap();
-                    let authorities = intermediates
-                        .iter()
-                        .enumerate()
-                        .rev()
-                        .map(|(idx, alg)| ias.get(&(authority, idx, alg)).unwrap())
-                        .chain(Some(ca));
+                    // Cadena de autoridades que deben firmar este certificado
+                    let (ca_cert,ca_key) = cas.get(&authority).unwrap();
 
-                    let cert = create_cert(&domain, format!("netbench Leaf {cert_idx}"), alg);
-                    let mut chain = String::new();
-                    let private_key = cert.serialize_private_key_pem();
+                    // Crear el certificado final
+                    let name = format!("netbench Leaf {cert_idx}");
+                    let (chain, private_key) = create_cert(&domain, &name, &alg, &ca_cert, &ca_key);
 
-                    let mut current_cert = &cert;
-                    for authority in authorities {
-                        let public = current_cert.serialize_pem_with_signer(authority).unwrap();
-                        chain.push_str(&public);
-                        current_cert = authority;
-                    }
-
+                    // Serializar la clave privada y construir PKCS#12
                     let pkcs12 = {
                         let public = openssl::x509::X509::from_pem(chain.as_bytes()).unwrap();
-                        let key = openssl::pkey::PKey::private_key_from_pem(private_key.as_bytes())
-                            .unwrap();
+                        let key =
+                            openssl::pkey::PKey::private_key_from_pem(private_key.as_bytes())
+                                .unwrap();
                         openssl::pkcs12::Pkcs12::builder()
                             .pkey(&key)
                             .cert(&public)
@@ -142,7 +244,7 @@ impl Certificate {
                     }));
                 }
                 Self::Public => {
-                    // noop - handled by private key
+                    // Public se maneja en PrivateKey
                 }
             }
         }
@@ -158,12 +260,13 @@ pub struct Authority {
 
 impl Authority {
     pub(crate) fn new<F: FnOnce(&mut AuthorityBuilder)>(state: super::State, f: F) -> Self {
-        let mut builder = AuthorityBuilder { alg: DEFAULT_ALG };
+        let default_alg = std::env::var("SIGNATURE_ALGORITHM").unwrap_or_else(|_| "rsa:2048".to_string());
+        let mut builder = AuthorityBuilder { alg: default_alg };
         f(&mut builder);
 
         let id = state
             .certificates
-            .push(Certificate::Authority { alg: builder.alg }) as u64;
+            .push(Certificate::Authority { alg: builder.alg.clone() }) as u64;
 
         Self { id, state }
     }
@@ -173,10 +276,11 @@ impl Authority {
     }
 
     pub fn key_pair_with<F: FnOnce(&mut KeyPairBuilder)>(&self, f: F) -> KeyPair {
+        let default_alg = std::env::var("SIGNATURE_ALGORITHM").unwrap_or_else(|_| "rsa:2048".to_string());
         let mut builder = KeyPairBuilder {
             authority: self.id,
             intermediates: vec![],
-            alg: DEFAULT_ALG,
+            alg: default_alg,
         };
 
         f(&mut builder);
@@ -204,15 +308,15 @@ impl Authority {
 
 #[derive(Debug)]
 pub struct AuthorityBuilder {
-    alg: &'static SignatureAlgorithm,
+    alg: String,
 }
 
 macro_rules! authority {
-    ($(($alg:ident, $lower:ident)),* $(,)?) => {
+    ($(($alg:expr, $lower:ident)),* $(,)?) => {
         impl AuthorityBuilder {
             $(
                 pub fn $lower(&mut self) -> &mut Self {
-                    self.alg = &rcgen::$alg;
+                    self.alg = $alg.to_string();
                     self
                 }
             )*
@@ -221,11 +325,10 @@ macro_rules! authority {
 }
 
 authority!(
-    (PKCS_ECDSA_P256_SHA256, ecdsa),
-    (PKCS_ED25519, ed25519),
-    (PKCS_RSA_SHA256, rsa_256),
-    (PKCS_RSA_SHA384, rsa_384),
-    (PKCS_RSA_SHA512, rsa_512),
+    ("rsa:2048", rsa_2048),
+    ("rsa:4096", rsa_4096),
+    ("ec:prime256v1", ecdsa),
+    ("ed25519", ed25519),
 );
 
 #[derive(Copy, Clone, Debug)]
@@ -238,8 +341,8 @@ pub struct KeyPair {
 #[derive(Debug)]
 pub struct KeyPairBuilder {
     authority: u64,
-    intermediates: Vec<&'static SignatureAlgorithm>,
-    alg: &'static SignatureAlgorithm,
+    intermediates: Vec<String>,
+    alg: String,
 }
 
 impl KeyPairBuilder {
@@ -248,9 +351,10 @@ impl KeyPairBuilder {
     }
 
     pub fn push_ia_with<F: FnOnce(&mut AuthorityBuilder)>(&mut self, f: F) -> &mut Self {
-        let mut builder = AuthorityBuilder { alg: self.alg };
+        let default_alg = std::env::var("SIGNATURE_ALGORITHM").unwrap_or_else(|_| "rsa:2048".to_string());
+        let mut builder = AuthorityBuilder { alg: default_alg };
         f(&mut builder);
-        self.intermediates.push(builder.alg);
+        self.intermediates.push(builder.alg.clone());
         self
     }
 }

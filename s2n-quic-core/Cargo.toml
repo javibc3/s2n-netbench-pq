@@ -50,7 +50,7 @@ futures = "0.3"
 futures-test = "0.3"
 ip_network = "0.4"
 plotters = { version = "0.3", default-features = false, features = ["svg_backend", "line_series"] }
-s2n-codec = { features = ["testing"] }
+s2n-codec = { version = "=0.32.0", features = ["testing"] }
 
 [target.'cfg(loom)'.dev-dependencies]
 loom = { version = "0.7", features = ["checkpoint", "futures"] }

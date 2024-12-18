@@ -57,13 +57,13 @@ usdt:{{bin}}:netbench__profile
   @P[arg1]=hist(arg2);
 }
 
-uprobe:{{libc}}:malloc
+uprobe:/lib/x86_64-linux-gnu/libc.so.6:malloc
 /pid==cpid/
 {
   @a=stats(arg0);
 }
 
-uprobe:{{libc}}:realloc
+uprobe:/lib/x86_64-linux-gnu/libc.so.6:realloc
 /pid==cpid/
 {
   @R=stats(arg1);

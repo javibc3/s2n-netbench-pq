@@ -10,6 +10,11 @@ set -e
 ARTIFACT_FOLDER="target/release"
 NETBENCH_ARTIFACT_FOLDER="target/s2n-netbench"
 
+# remove the old results if the folder contains anything
+if [ "$(ls -A $NETBENCH_ARTIFACT_FOLDER)" ]; then
+    rm -rf $NETBENCH_ARTIFACT_FOLDER/*
+fi
+
 # the run_trial function will run the request-response scenario
 # with the driver passed in as the first argument
 run_trial() {
@@ -24,7 +29,7 @@ run_trial() {
 
     # run the server while collecting metrics.
     echo "  running the server"
-    ./$ARTIFACT_FOLDER/s2n-netbench-collector \
+    sudo ./$ARTIFACT_FOLDER/s2n-netbench-collector \
     ./$ARTIFACT_FOLDER/s2n-netbench-driver-server-$DRIVER \
     --scenario ./$NETBENCH_ARTIFACT_FOLDER/$SCENARIO.json \
     > $NETBENCH_ARTIFACT_FOLDER/results/$SCENARIO/$DRIVER/server.json &
@@ -37,7 +42,7 @@ run_trial() {
 
     # run the client. Port 4433 is the default for the server.
     echo "  running the client"
-    SERVER_0=localhost:4433 ./$ARTIFACT_FOLDER/s2n-netbench-collector \
+    sudo SERVER_0=localhost:4433 ./$ARTIFACT_FOLDER/s2n-netbench-collector \
      ./$ARTIFACT_FOLDER/s2n-netbench-driver-client-$DRIVER \
      --scenario ./$NETBENCH_ARTIFACT_FOLDER/$SCENARIO.json \
      > $NETBENCH_ARTIFACT_FOLDER/results/$SCENARIO/$DRIVER/client.json
@@ -55,15 +60,21 @@ run_trial() {
 # generate the scenario files. This will generate .json files that can be found
 # in the netbench/target/netbench directory. Config for all scenarios is done
 # through this binary.
+# This environment variable is used to set the signature algorithm for the scenarios. 
+# It supports all the post-quantum algorithms as specified in https://github.com/open-quantum-safe/oqs-provider.
+SIGNATURE_ALGORITHM="mldsa44"
 ./$ARTIFACT_FOLDER/s2n-netbench-scenarios --request_response.connections 10000 --request_response.request_size 1 --request_response.response_size 1
 
 # run_trial request_response s2n-quic
 # run_trial request_response s2n-tls
-# run_trial request_response openssl
+run_trial request_response openssl
+run_trial request_response openssl-mlkem768
 
-run_trial connect s2n-quic
-run_trial connect s2n-tls
+# run_trial connect s2n-quic
+# run_trial connect s2n-tls
 run_trial connect openssl
+run_trial connect openssl-mlkem768
+
 
 echo "generating the report"
 ./$ARTIFACT_FOLDER/s2n-netbench report-tree $NETBENCH_ARTIFACT_FOLDER/results $NETBENCH_ARTIFACT_FOLDER/report

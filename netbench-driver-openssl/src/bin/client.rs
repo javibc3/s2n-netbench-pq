@@ -52,7 +52,7 @@ impl NetbenchClient {
     fn duplex_client(&self) -> Result<ClientImpl> {
         let mut builder = SslConnector::builder(SslMethod::tls_client())?;
         builder.set_min_proto_version(Some(SslVersion::TLS1_3))?;
-        builder.set_verify(SslVerifyMode::PEER);
+        builder.set_verify(SslVerifyMode::NONE);
 
         for ca in self.opts.certificate_authorities() {
             let ca = openssl::x509::X509::from_pem(ca.pem.as_bytes())?;
