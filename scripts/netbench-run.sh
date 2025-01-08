@@ -62,18 +62,20 @@ run_trial() {
 # through this binary.
 # This environment variable is used to set the signature algorithm for the scenarios. 
 # It supports all the post-quantum algorithms as specified in https://github.com/open-quantum-safe/oqs-provider.
-SIGNATURE_ALGORITHM="mldsa44"
+SIGNATURE_ALGORITHM=ed25519
 ./$ARTIFACT_FOLDER/s2n-netbench-scenarios --request_response.connections 10000 --request_response.request_size 1 --request_response.response_size 1
 
 # run_trial request_response s2n-quic
 # run_trial request_response s2n-tls
 run_trial request_response openssl
 run_trial request_response openssl-mlkem768
+run_trial request_response boringssl
 
 # run_trial connect s2n-quic
 # run_trial connect s2n-tls
 run_trial connect openssl
 run_trial connect openssl-mlkem768
+run_trial connect boringssl
 
 
 echo "generating the report"
